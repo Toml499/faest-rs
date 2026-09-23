@@ -22,6 +22,11 @@ use crate::{
     },
 };
 
+// Test-only signature tracer for the Java Card port. Not part of the library.
+#[cfg(all(test, feature = "std"))]
+#[path = "faest_dump.rs"]
+mod dump;
+
 type RO<P> =
     <<<P as FAESTParameters>::OWF as OWFParameters>::BaseParams as BaseParameters>::RandomOracle;
 
