@@ -5,7 +5,18 @@ small test-only harness for a Java Card port of FAEST-EM-128f. Upstream library 
 unchanged.
 
 **Branch `main` is kept pristine.** All local work lives on `thesis-harness`, so upstream updates
-are a `git checkout main && git pull` followed by a rebase.
+are a `git checkout main && git pull upstream main` followed by a rebase.
+
+## Remotes
+
+| remote | repository |
+|---|---|
+| `origin` | `git@github.com:Toml499/faest-rs.git` — the fork; `thesis-harness` lives here |
+| `upstream` | `https://github.com/ait-crypto/faest-rs` — pull only, never push |
+
+The fork is consumed as a git submodule of the `masterthesis` repository at `faest-rs/`, pinned to
+a commit and tracking `thesis-harness`. A fresh clone needs
+`git submodule update --init --recursive`.
 
 ## What was added
 
