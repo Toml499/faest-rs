@@ -22,9 +22,10 @@ a commit and tracking `thesis-harness`. A fresh clone needs
 
 | file | lines | what |
 |---|---|---|
-| `src/faest_dump.rs` | ~350 | the signature tracer, `#[cfg(all(test, feature = "std"))]` |
+| `src/faest_dump.rs` | ~420 | the signature tracer, `#[cfg(all(test, feature = "std"))]` |
 | `src/faest.rs` | +4 | the `mod dump;` declaration that pulls it in |
-| `tests/data/dump/trace_faest_em_128f.json` | generated | its output, committed |
+| `tests/data/dump/trace_faest_em_128f.json` | generated | its output for KAT record 0, committed |
+| `tests/data/dump/trace_faest_em_128f_all.jsonl` | generated | its output for all 100 KAT records, one per line (7.5 MB), committed |
 
 Nothing is reachable from a non-test build: the module is `#[cfg(test)]` and no library code
 calls into it.
@@ -38,6 +39,13 @@ the NIST DRBG exactly as `tests/nist.rs` does, keygen first and then the 16 `rho
 and writes every intermediate to `tests/data/dump/trace_faest_em_128f.json` as hex.
 
 Output: `FAEST_TRACE_OUT=<path>` overrides the destination.
+
+The same run also executes `dump_trace_faest_em_128f_all`, which traces every record of the full
+`PQCsignKAT_faest_em_128f.rsp` and writes `tests/data/dump/trace_faest_em_128f_all.jsonl`: one
+trace document per line, record `n` on line `n`, same fields as above, each asserted against that
+record's `sm`. `FAEST_TRACE_ALL_OUT=<path>` overrides the destination. Both together take about
+30 s in a debug build. The Java side tests each module against all 100 with it
+(`ModuleTraceTest`).
 
 22 recorded fields, in computation order (the file's `order` array):
 

@@ -29,6 +29,12 @@
 //! original — the final assertion against the KAT signature is what catches it. If that
 //! assertion fails after an upstream update, re-diff the two functions first.
 //!
+//! # All 100 records
+//!
+//! `dump_trace_faest_em_128f_all` does the same for every record of the full
+//! `PQCsignKAT_faest_em_128f.rsp` and writes one trace per line (JSON Lines), so the Java
+//! side can test each module in isolation against 100 independent inputs, not one.
+//!
 //! Run with:
 //!
 //! ```text
@@ -50,6 +56,13 @@ const KAT_FILE: &str = "reduced_PQCsignKAT_faest_em_128f.rsp";
 /// Where the trace is written, relative to the crate root, unless `FAEST_TRACE_OUT` says
 /// otherwise.
 const DEFAULT_OUT: &str = "tests/data/dump/trace_faest_em_128f.json";
+
+/// The full KAT, all 100 records, for the per-record traces.
+const KAT_FILE_ALL: &str = "PQCsignKAT_faest_em_128f.rsp";
+
+/// Where the 100 per-record traces are written, one JSON document per line (record `n` on
+/// line `n`), unless `FAEST_TRACE_ALL_OUT` says otherwise.
+const DEFAULT_OUT_ALL: &str = "tests/data/dump/trace_faest_em_128f_all.jsonl";
 
 // ---------------------------------------------------------------------------------------
 // Trace recording
@@ -248,12 +261,13 @@ fn data_dir() -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("tests/data")
 }
 
-/// Read the first record of a `.rsp` file. Modelled on `tests/nist.rs`, which is the
+/// Read every record of a `.rsp` file, in order. Modelled on `tests/nist.rs`, which is the
 /// authority on this format.
-fn read_first_kat(name: &str) -> KatRecord {
+fn read_kats(name: &str) -> Vec<KatRecord> {
     let path = data_dir().join(name);
     let file = fs::File::open(&path).unwrap_or_else(|e| panic!("open {}: {e}", path.display()));
 
+    let mut kats = Vec::new();
     let mut kat = KatRecord::default();
     let mut mlen = 0usize;
     let mut smlen = 0usize;
@@ -265,7 +279,11 @@ fn read_first_kat(name: &str) -> KatRecord {
         }
         let (kind, value) = line.split_once(" = ").expect("kind = value");
         match kind {
-            "count" => assert_eq!(value, "0", "expected record 0 first in {name}"),
+            "count" => assert_eq!(
+                value,
+                kats.len().to_string(),
+                "records out of order in {name}"
+            ),
             "mlen" => mlen = value.parse().unwrap(),
             "smlen" => smlen = value.parse().unwrap(),
             "seed" => kat.seed = hex::decode(value).expect("hex seed"),
@@ -278,24 +296,24 @@ fn read_first_kat(name: &str) -> KatRecord {
             "sm" => {
                 kat.sm = hex::decode(value).expect("hex sm");
                 assert_eq!(kat.sm.len(), smlen);
-                return kat;
+                kats.push(std::mem::take(&mut kat));
             }
             _ => unreachable!("unknown kind: {kind}"),
         }
     }
-    panic!("no complete record in {name}");
+    assert!(!kats.is_empty(), "no complete record in {name}");
+    kats
 }
 
 // ---------------------------------------------------------------------------------------
-// The test
+// One record
 // ---------------------------------------------------------------------------------------
 
-#[test]
-fn dump_trace_faest_em_128f() {
+/// Regenerates `(sk, rho)` from the record's seed, signs with recording, asserts that the
+/// result is the KAT's own signature, and returns the trace document.
+fn trace_record(kat: &KatRecord, file: &str, count: usize) -> Value {
     type P = FAESTEM128fParameters;
     type O = <P as FAESTParameters>::OWF;
-
-    let kat = read_first_kat(KAT_FILE);
 
     // Same DRBG, same order of draws as tests/nist.rs: keygen first, then rho.
     let mut rng =
@@ -306,12 +324,12 @@ fn dump_trace_faest_em_128f() {
     assert_eq!(
         hex::encode(sk.to_vec()),
         hex::encode(&kat.sk),
-        "regenerated secret key differs from the KAT — the DRBG or keygen changed"
+        "record {count}: regenerated secret key differs from the KAT — the DRBG or keygen changed"
     );
     assert_eq!(
         hex::encode(pk.to_vec()),
         hex::encode(&kat.pk),
-        "regenerated public key differs from the KAT"
+        "record {count}: regenerated public key differs from the KAT"
     );
 
     // lib.rs::sample_rho — lambda bytes, drawn after keygen.
@@ -331,15 +349,15 @@ fn dump_trace_faest_em_128f() {
     assert_eq!(
         hex::encode(&signature),
         hex::encode(expected),
-        "traced signature does not match the KAT"
+        "record {count}: traced signature does not match the KAT"
     );
 
-    let document = json!({
+    json!({
         "parameter_set": "faest_em_128f",
         "generated_by": "faest-rs src/faest_dump.rs (thesis-harness branch)",
         "source": {
-            "file": KAT_FILE,
-            "count": 0,
+            "file": file,
+            "count": count,
         },
         "sizes": {
             "lambda_bytes": <O as OWFParameters>::LambdaBytes::USIZE,
@@ -356,23 +374,55 @@ fn dump_trace_faest_em_128f() {
             "pk": hex::encode(&kat.pk),
             "rho": hex::encode(rho.as_slice()),
         },
-        "order": Value::Array(trace.order.clone()),
-        "trace": Value::Object(trace.values.clone()),
+        "order": Value::Array(trace.order),
+        "trace": Value::Object(trace.values),
         "signature": hex::encode(&signature),
-    });
+    })
+}
 
-    let out = match env::var("FAEST_TRACE_OUT") {
+fn out_path(var: &str, default: &str) -> PathBuf {
+    let out = match env::var(var) {
         Ok(path) => PathBuf::from(path),
-        Err(_) => PathBuf::from(env!("CARGO_MANIFEST_DIR")).join(DEFAULT_OUT),
+        Err(_) => PathBuf::from(env!("CARGO_MANIFEST_DIR")).join(default),
     };
     if let Some(parent) = out.parent() {
         fs::create_dir_all(parent).expect("create output directory");
     }
+    out
+}
+
+// ---------------------------------------------------------------------------------------
+// The tests
+// ---------------------------------------------------------------------------------------
+
+#[test]
+fn dump_trace_faest_em_128f() {
+    let document = trace_record(&read_kats(KAT_FILE)[0], KAT_FILE, 0);
+    let fields = document["order"].as_array().map_or(0, Vec::len);
+
+    let out = out_path("FAEST_TRACE_OUT", DEFAULT_OUT);
     fs::write(
         &out,
         serde_json::to_string_pretty(&document).expect("serialize trace"),
     )
     .unwrap_or_else(|e| panic!("write {}: {e}", out.display()));
 
-    println!("wrote {} fields to {}", trace.order.len(), out.display());
+    println!("wrote {} fields to {}", fields, out.display());
+}
+
+/// One trace per record of the full KAT, as JSON Lines: record `n` on line `n`.
+#[test]
+fn dump_trace_faest_em_128f_all() {
+    let kats = read_kats(KAT_FILE_ALL);
+    let mut lines = String::new();
+    for (count, kat) in kats.iter().enumerate() {
+        let document = trace_record(kat, KAT_FILE_ALL, count);
+        lines.push_str(&serde_json::to_string(&document).expect("serialize trace"));
+        lines.push('\n');
+    }
+
+    let out = out_path("FAEST_TRACE_ALL_OUT", DEFAULT_OUT_ALL);
+    fs::write(&out, lines).unwrap_or_else(|e| panic!("write {}: {e}", out.display()));
+
+    println!("wrote {} traces to {}", kats.len(), out.display());
 }
